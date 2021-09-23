@@ -1,19 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"crypto"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"flag"
 	"fmt"
-	"io/ioutil"
-	"os"
-
 	"github.com/pkg/errors"
 	jose "gopkg.in/square/go-jose.v2"
+	"os"
 )
 
 // copied from kubernetes/kubernetes#78502
@@ -36,21 +34,16 @@ type KeyResponse struct {
 	Keys []jose.JSONWebKey `json:"keys"`
 }
 
-func readKey(filename string) ([]byte, error) {
+func readKey(content []byte) ([]byte, error) {
 	var response []byte
-	content, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return response, errors.WithMessage(err, "error reading file")
-	}
-
 	block, _ := pem.Decode(content)
 	if block == nil {
-		return response, errors.Errorf("Error decoding PEM file %s", filename)
+		return response, errors.Errorf("Error decoding PEM")
 	}
 
 	pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return response, errors.Wrapf(err, "Error parsing key content of %s", filename)
+		return response, errors.Wrapf(err, "Error parsing key content")
 	}
 	switch pubKey.(type) {
 	case *rsa.PublicKey:
@@ -78,19 +71,33 @@ func readKey(filename string) ([]byte, error) {
 		Algorithm: string(alg),
 		Use:       "sig",
 	})
+	keys = append(keys, jose.JSONWebKey{
+		Key:       pubKey,
+		Algorithm: string(alg),
+		Use:       "sig",
+	})
 
 	keyResponse := KeyResponse{Keys: keys}
-	return json.MarshalIndent(keyResponse, "", "    ")
+	return json.Marshal(keyResponse)
 }
 
 func main() {
-	keyFile := flag.String("key", "", "The public key input file in PKCS8 format")
-	flag.Parse()
+	scanner := bufio.NewScanner(os.Stdin)
+	var res map[string]string
+	for scanner.Scan() {
+		if err := json.Unmarshal([]byte(scanner.Text()), &res); err != nil {
+			panic(err)
+		}
 
-	output, err := readKey(*keyFile)
-	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(1)
+		bb := []byte(res["pub_key"])
+		output, err := readKey(bb)
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(1)
+		}
+
+		j := map[string]string{"jwks": string(output)}
+		jm, _ := json.Marshal(j)
+		fmt.Println(string(jm))
 	}
-	fmt.Println(string(output))
 }
